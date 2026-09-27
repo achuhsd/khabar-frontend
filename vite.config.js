@@ -20,12 +20,12 @@ export default defineConfig({
           {
             src: 'icon-192.jpg',
             sizes: '192x192',
-            type: 'image/jpg',
+            type: 'image/jpeg',
           },
           {
             src: 'icon-512.jpg',
             sizes: '512x512',
-            type: 'image/jpg',
+            type: 'image/jpeg',
           },
         ],
       },
