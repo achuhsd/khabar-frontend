@@ -35,6 +35,10 @@ export function incrementSecond() {
 // the app (in App.jsx), not inside individual pages - otherwise multiple
 // timers would stack up and count too fast.
 export function startGlobalTimer() {
-  const intervalId = setInterval(incrementSecond, 1000)
+  const intervalId = setInterval(() => {
+    if (document.visibilityState === 'visible') {
+      incrementSecond()
+    }
+  }, 1000)
   return () => clearInterval(intervalId)
 }

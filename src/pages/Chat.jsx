@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { ArrowLeft, Bot, Mic, Send, X, Brain, RefreshCw, TrendingUp } from 'lucide-react'
 import api from '../lib/api'
+import { getStoredUser } from '../lib/user'
 
 const C = {
   navy: '#0A0F2C',
@@ -51,6 +52,8 @@ function TypingDots() {
     </div>
   )
 }
+const user = getStoredUser()
+const firstName = user?.fullName?.split(' ')[0] || 'there'
 
 export default function Chat() {
   const navigate = useNavigate()
@@ -64,40 +67,81 @@ export default function Chat() {
       id: 1,
       sender: 'bot',
       text: article
-        ? `Hey Aditya! 👋\nI'm Khabar Mitra. Ask me anything about "${article.title}"!`
-        : "Hey Aditya! 👋\nI'm Khabar Mitra. Ask me anything about today's news!",
+        ? `Hey ${firstName}!👋\nI'm Khabar Mitra. Ask me anything about "${article.title}"!`
+        : `Hey ${firstName}! 👋\nI'm Khabar Mitra. Ask me anything about today's news!`,
       time: 'Just now',
     },
   ])
   const [input, setInput] = useState('')
   const [isTyping, setIsTyping] = useState(false)
+  const [showSlowHint, setShowSlowHint] = useState(false)
   const [showContext, setShowContext] = useState(!!article)
+  // Countdown for 429 retry-after (seconds remaining, 0 = enabled)
+  const [retryCountdown, setRetryCountdown] = useState(0)
+  const countdownRef = useRef(null)
   const scrollRef = useRef(null)
+  const sendingRef = useRef(false)
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
   }, [messages, isTyping])
 
-  async function sendMessage(text) {
-    const trimmed = text.trim()
-    if (!trimmed || isTyping) return
+  // Clear countdown timer on unmount
+  useEffect(() => {
+    return () => { if (countdownRef.current) clearInterval(countdownRef.current) }
+  }, [])
 
-    const userMsg = {
-      id: Date.now(),
-      sender: 'user',
-      text: trimmed,
-      time: 'Just now',
+  function startCountdown(seconds) {
+    if (countdownRef.current) clearInterval(countdownRef.current)
+    setRetryCountdown(seconds)
+    countdownRef.current = setInterval(() => {
+      setRetryCountdown((prev) => {
+        if (prev <= 1) {
+          clearInterval(countdownRef.current)
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+  }
+
+  async function sendMessage(text, retryMessageId = null) {
+    const trimmed = text.trim()
+    // Single-request guard: block if already sending OR countdown active
+    if (!trimmed || sendingRef.current || retryCountdown > 0) return
+
+    sendingRef.current = true
+    const userMsg = retryMessageId
+      ? null
+      : {
+          id: Date.now(),
+          sender: 'user',
+          text: trimmed,
+          time: 'Just now',
+        }
+    const historyForApi = retryMessageId
+      ? messages.filter((m) => m.id !== retryMessageId)
+      : [...messages, userMsg]
+    if (retryMessageId) {
+      setMessages(historyForApi)
+    } else {
+      setMessages(historyForApi)
+      setInput('')
     }
-    const historyForApi = [...messages, userMsg]
-    setMessages(historyForApi)
-    setInput('')
     setIsTyping(true)
+    setShowSlowHint(false)
+
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 30_000)
+    const slowHintTimeoutId = setTimeout(() => setShowSlowHint(true), 5_000)
 
     try {
       const res = await api.post('/chat', {
         message: trimmed,
         article,
         history: historyForApi.map((m) => ({ sender: m.sender, text: m.text })),
+      }, {
+        signal: controller.signal,
       })
 
       setMessages((prev) => [
@@ -105,17 +149,44 @@ export default function Chat() {
         { id: Date.now() + 1, sender: 'bot', text: res.data.reply, time: 'Just now' },
       ])
     } catch (err) {
-      const backendMessage = err.response?.data?.message
+      const status = err.response?.status
+      const serverData = err.response?.data
+      const timedOut = controller.signal.aborted || err.code === 'ECONNABORTED'
+      let errorMessage
+      let retryText
+
+      if (timedOut || status === 504) {
+        errorMessage = 'Server abhi so raha tha ya busy hai, 30-60 second ruk ke dobara try karo 🙏'
+        retryText = trimmed
+      } else if (status === 429) {
+        const secs = serverData?.retryAfterSeconds
+        if (secs && secs > 0) {
+          startCountdown(secs)
+          errorMessage = serverData.message || `AI abhi busy hai, ${secs} second baad dobara try karo 🙏`
+        } else {
+          errorMessage = serverData?.message || 'AI par abhi bahut requests hain, 1 minute baad try karo 🙏'
+        }
+      } else if (!err.response) {
+        errorMessage = 'Internet connection check karo, phir dobara try karo 🙏'
+      } else {
+        errorMessage = 'Abhi reply nahi aa paaya. Thodi der baad dobara try karo 🙏'
+      }
+
       setMessages((prev) => [
         ...prev,
         {
           id: Date.now() + 1,
           sender: 'bot',
-          text: `⚠️ ${backendMessage || "Kuch gadbad ho gayi, dobara try karo."}`,
+          text: `⚠️ ${errorMessage}`,
           time: 'Just now',
+          retryText,
         },
       ])
     } finally {
+      clearTimeout(timeoutId)
+      clearTimeout(slowHintTimeoutId)
+      sendingRef.current = false
+      setShowSlowHint(false)
       setIsTyping(false)
     }
   }
@@ -124,6 +195,9 @@ export default function Chat() {
     e.preventDefault()
     sendMessage(input)
   }
+
+  // True when the UI should block all sends (in-flight OR rate-limited)
+  const isDisabled = isTyping || retryCountdown > 0
 
   return (
     <div
@@ -268,18 +342,39 @@ export default function Chat() {
                 </div>
               )}
               {m.text}
+              {m.retryText && !isTyping && (
+                <button
+                  type="button"
+                  onClick={() => sendMessage(m.retryText, m.id)}
+                  style={{
+                    display: 'block',
+                    marginTop: 10,
+                    background: 'transparent',
+                    border: `1px solid ${C.teal}`,
+                    color: C.teal,
+                    borderRadius: 18,
+                    padding: '6px 12px',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Retry
+                </button>
+              )}
             </div>
             <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
-              {m.sender === 'user' ? `Aditya • ${m.time}` : m.time}
+              {m.sender === 'user' ? `${firstName} • ${m.time}` : m.time}
             </div>
 
             {/* Quick reply chips under the latest bot message */}
-            {m.sender === 'bot' && m.id === messages[messages.length - 1].id && !isTyping && (
+            {m.sender === 'bot' && m.id === messages[messages.length - 1].id && !isDisabled && (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
                 {QUICK_CHIPS.map((chip) => (
                   <button
                     key={chip.label}
                     onClick={() => sendMessage(chip.label)}
+                    disabled={isDisabled}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -291,7 +386,8 @@ export default function Chat() {
                       padding: '8px 14px',
                       fontSize: 13,
                       fontWeight: 600,
-                      cursor: 'pointer',
+                      cursor: isDisabled ? 'not-allowed' : 'pointer',
+                      opacity: isDisabled ? 0.5 : 1,
                     }}
                   >
                     {chip.label} {chip.icon && <chip.icon size={14} />}
@@ -305,6 +401,11 @@ export default function Chat() {
         {isTyping && (
           <div style={{ alignSelf: 'flex-start', background: C.cardDark, borderLeft: `3px solid ${C.teal}`, borderRadius: 14, borderTopLeftRadius: 4, padding: '12px 14px' }}>
             <TypingDots />
+            {showSlowHint && (
+              <div style={{ color: C.muted, fontSize: 12, marginTop: 6 }}>
+                Server jag raha hai, thoda time lagega...
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -315,6 +416,7 @@ export default function Chat() {
           <button
             key={chip.label}
             onClick={() => sendMessage(chip.label)}
+            disabled={isDisabled}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -327,7 +429,8 @@ export default function Chat() {
               padding: '10px 14px',
               fontSize: 13,
               fontWeight: 600,
-              cursor: 'pointer',
+              cursor: isDisabled ? 'not-allowed' : 'pointer',
+              opacity: isDisabled ? 0.5 : 1,
               whiteSpace: 'nowrap',
             }}
           >
@@ -357,8 +460,8 @@ export default function Chat() {
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Kuch bhi pucho..."
-          disabled={isTyping}
+          placeholder={retryCountdown > 0 ? `${retryCountdown}s baad try karo...` : 'Kuch bhi pucho...'}
+          disabled={isDisabled}
           style={{
             flex: 1,
             background: C.cardDark,
@@ -372,9 +475,9 @@ export default function Chat() {
         />
         <button
           type="submit"
-          disabled={isTyping}
+          disabled={isDisabled}
           style={{
-            background: C.coral,
+            background: retryCountdown > 0 ? C.cardDarker : C.coral,
             border: 'none',
             borderRadius: '50%',
             width: 42,
@@ -382,13 +485,16 @@ export default function Chat() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            cursor: isTyping ? 'not-allowed' : 'pointer',
-            opacity: isTyping ? 0.6 : 1,
+            cursor: isDisabled ? 'not-allowed' : 'pointer',
+            opacity: isDisabled ? 0.6 : 1,
             flexShrink: 0,
           }}
           aria-label="Send message"
         >
-          <Send size={18} color={C.white} />
+          {retryCountdown > 0
+            ? <span style={{ fontSize: 12, fontWeight: 700, color: C.white }}>{retryCountdown}</span>
+            : <Send size={18} color={C.white} />
+          }
         </button>
       </form>
     </div>

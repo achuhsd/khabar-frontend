@@ -10,6 +10,7 @@ const FEEDBACK_WHATSAPP_NUMBER = '919324460120'
 export default function Profile() {
   const navigate = useNavigate()
   const user = getStoredUser()
+  const isGuest = !user || !user.fullName
 
   const streak = user.streak ?? 0
   const tokens = user.tokens ?? 0
@@ -363,24 +364,43 @@ export default function Profile() {
         </div>
       </div>
 
-      {/* Logout */}
+      {/* Login / Logout */}
       <div style={{ padding: '0 20px 16px' }}>
-        <button
-          onClick={handleLogout}
-          style={{
-            width: '100%',
-            background: 'transparent',
-            border: '1px solid #FF6B4755',
-            color: '#FF6B47',
-            fontWeight: '700',
-            fontSize: '13px',
-            padding: '14px',
-            borderRadius: '14px',
-            cursor: 'pointer'
-          }}
-        >
-          🚪 Logout
-        </button>
+        {isGuest ? (
+          <button
+            onClick={() => navigate('/login')}
+            style={{
+              width: '100%',
+              background: '#FF6B47',
+              border: 'none',
+              color: '#fff',
+              fontWeight: '700',
+              fontSize: '13px',
+              padding: '14px',
+              borderRadius: '14px',
+              cursor: 'pointer'
+            }}
+          >
+            🔐 Login to save your progress
+          </button>
+        ) : (
+          <button
+            onClick={handleLogout}
+            style={{
+              width: '100%',
+              background: 'transparent',
+              border: '1px solid #FF6B4755',
+              color: '#FF6B47',
+              fontWeight: '700',
+              fontSize: '13px',
+              padding: '14px',
+              borderRadius: '14px',
+              cursor: 'pointer'
+            }}
+          >
+            🚪 Logout
+          </button>
+        )}
       </div>
 
       {/* Language picker modal */}

@@ -1,14 +1,22 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import api from '../lib/api'
 
 export default function ArticleDetail() {
   const navigate = useNavigate()
   const location = useLocation()
+  const focus = location.state?.focus || null  // 'what' | 'why' | 'means' | null
 
   const [article, setArticle] = useState(location.state?.article || null)
   const [loading, setLoading] = useState(!location.state?.article)
   const [error, setError] = useState('')
+  const [highlightSection, setHighlightSection] = useState(null)
+
+  const whatRef = useRef(null)
+  const whyRef = useRef(null)
+  const meansRef = useRef(null)
+
+  const focusRefMap = { what: whatRef, why: whyRef, means: meansRef }
 
   useEffect(() => {
     // If someone opens /article directly (e.g. page refresh) with no article
@@ -32,6 +40,21 @@ export default function ArticleDetail() {
     loadFallback()
     return () => { cancelled = true }
   }, [article])
+
+  // Scroll to and highlight the focused section after render
+  useEffect(() => {
+    if (!focus || loading) return
+    const ref = focusRefMap[focus]
+    if (!ref?.current) return
+    // slight delay so layout is complete
+    const t = setTimeout(() => {
+      ref.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setHighlightSection(focus)
+      setTimeout(() => setHighlightSection(null), 1800)
+    }, 400)
+    return () => clearTimeout(t)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus, loading])
 
   if (loading) {
     return (
@@ -140,7 +163,14 @@ export default function ArticleDetail() {
             </p>
           </div>
 
-          <div style={{ padding: '12px 16px', borderBottom: '1px solid #1A2040', display: 'flex', gap: '12px' }}>
+          <div
+            ref={whatRef}
+            style={{
+              padding: '12px 16px', borderBottom: '1px solid #1A2040', display: 'flex', gap: '12px',
+              borderLeft: highlightSection === 'what' ? '4px solid #FF6B47' : '4px solid transparent',
+              transition: 'border-left-color 0.3s'
+            }}
+          >
             <span style={{ fontSize: '18px' }}>📌</span>
             <div>
               <p style={{ color: '#fff', fontSize: '12px', fontWeight: '700', margin: '0 0 4px' }}>What happened:</p>
@@ -150,7 +180,14 @@ export default function ArticleDetail() {
             </div>
           </div>
 
-          <div style={{ padding: '12px 16px', borderBottom: '1px solid #1A2040', display: 'flex', gap: '12px' }}>
+          <div
+            ref={whyRef}
+            style={{
+              padding: '12px 16px', borderBottom: '1px solid #1A2040', display: 'flex', gap: '12px',
+              borderLeft: highlightSection === 'why' ? '4px solid #FF6B47' : '4px solid transparent',
+              transition: 'border-left-color 0.3s'
+            }}
+          >
             <span style={{ fontSize: '18px' }}>🔍</span>
             <div>
               <p style={{ color: '#fff', fontSize: '12px', fontWeight: '700', margin: '0 0 4px' }}>Why it happened:</p>
@@ -160,7 +197,14 @@ export default function ArticleDetail() {
             </div>
           </div>
 
-          <div style={{ padding: '12px 16px', display: 'flex', gap: '12px' }}>
+          <div
+            ref={meansRef}
+            style={{
+              padding: '12px 16px', display: 'flex', gap: '12px',
+              borderLeft: highlightSection === 'means' ? '4px solid #FF6B47' : '4px solid transparent',
+              transition: 'border-left-color 0.3s'
+            }}
+          >
             <span style={{ fontSize: '18px' }}>💡</span>
             <div>
               <p style={{ color: '#fff', fontSize: '12px', fontWeight: '700', margin: '0 0 4px' }}>What it means for you:</p>
